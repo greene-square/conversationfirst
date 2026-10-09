@@ -413,8 +413,11 @@ p, li, dd, blockquote, .chat-bubble p, .cf-doc p, .cf-doc li {
 }
 .section-accordion-inner {
   overflow: hidden;
+  min-height: 0;
 }
-.section-accordion[data-open="true"] .section-accordion-inner {
+/* Padding lives inside the clipped wrapper so it animates with the row
+   instead of snapping on or off at the start of the transition. */
+.section-accordion-content {
   padding-top: var(--space-6);
   padding-bottom: var(--space-16);
 }
