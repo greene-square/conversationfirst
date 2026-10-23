@@ -9,6 +9,7 @@ interface SessionHistoryProps {
   onSelectSession: (session: InterviewSession) => void
   onDeleteSession: (sessionId: string) => void
   hasDeepgramKey: boolean
+  usingSampleExamples?: boolean
 }
 
 function formatDate(iso: string): string {
@@ -35,6 +36,7 @@ export default function SessionHistory({
   onSelectSession,
   onDeleteSession,
   hasDeepgramKey,
+  usingSampleExamples = false,
 }: SessionHistoryProps) {
   return (
     <>
@@ -59,6 +61,12 @@ export default function SessionHistory({
       {!hasDeepgramKey && (
         <div className="op-setup-hint">
           Add your Deepgram API key in the vault to get started. Get one free at deepgram.com
+        </div>
+      )}
+
+      {usingSampleExamples && (
+        <div className="op-setup-hint">
+          Matching against sample answers. Import your own with scripts/seed-onpoint-examples.mjs.
         </div>
       )}
 
