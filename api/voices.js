@@ -1,75 +1,30 @@
-import { createClient } from '@supabase/supabase-js';
+import { json, clientIp, tooManyRequests } from './_lib/http.js';
+import { bearerToken, getUser, getElevenLabsKey } from './_lib/auth.js';
+import { rateLimit } from './_lib/rateLimit.js';
 
 export const config = {
   runtime: 'edge',
 };
-
-function getSupabase() {
-  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) return null;
-  return createClient(url, key);
-}
-
-async function getUser(req) {
-  const supabase = getSupabase();
-  if (!supabase) return null;
-  const token = req.headers.get('authorization')?.replace('Bearer ', '');
-  if (!token) return null;
-  const { data: { user }, error } = await supabase.auth.getUser(token);
-  if (error || !user) return null;
-  return user;
-}
-
-async function getElevenLabsKey(userId) {
-  const supabase = getSupabase();
-  if (!supabase) return null;
-
-  const { data: hh } = await supabase
-    .from('user_households')
-    .select('household_id')
-    .eq('user_id', userId)
-    .limit(1)
-    .maybeSingle();
-
-  if (!hh?.household_id) return null;
-
-  const { data: conn } = await supabase
-    .from('connections')
-    .select('access_token')
-    .eq('household_id', hh.household_id)
-    .eq('provider_name', 'elevenlabs')
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
-
-  return conn?.access_token || null;
-}
 
 export default async function handler(req) {
   if (req.method !== 'GET') {
     return new Response('Method not allowed', { status: 405 });
   }
 
-  // Try env var first (demo mode), then fall back to vault lookup
-  let apiKey = process.env.ELEVENLABS_API_KEY || null;
+  const user = bearerToken(req) ? await getUser(req) : null;
 
-  if (!apiKey) {
-    const user = await getUser(req);
-    if (!user) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-    apiKey = await getElevenLabsKey(user.id);
+  const limited = await rateLimit(user ? `voices:user:${user.id}` : `voices:ip:${clientIp(req)}`, { limit: 30, windowMs: 10 * 60_000 });
+  if (!limited.ok) {
+    return tooManyRequests(limited.retryAfter, 'Too many requests. Try again in a few minutes.');
   }
 
+  // Signed-in users see their own vault key's voices; guests see the site
+  // key's stock voices only, never cloned or custom ones.
+  const siteKey = process.env.ELEVENLABS_API_KEY || null;
+  const apiKey = user ? (await getElevenLabsKey(user.id)) || siteKey : siteKey;
   if (!apiKey) {
-    return new Response(JSON.stringify({ error: 'No ElevenLabs API key configured.' }), {
-      status: 404,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    if (!user) return json({ error: 'Unauthorized' }, 401);
+    return json({ error: 'No ElevenLabs API key configured.' }, 404);
   }
 
   try {
@@ -78,29 +33,21 @@ export default async function handler(req) {
     });
 
     if (!response.ok) {
-      return new Response(JSON.stringify({ error: 'Failed to fetch voices from ElevenLabs.' }), {
-        status: 502,
-        headers: { 'Content-Type': 'application/json' },
-      });
+      return json({ error: 'Failed to fetch voices from ElevenLabs.' }, 502);
     }
 
     const data = await response.json();
+    const voices = (data.voices || [])
+      .map(v => ({
+        id: v.voice_id,
+        name: v.name,
+        category: v.category || 'custom',
+        previewUrl: v.preview_url || null,
+      }))
+      .filter(v => user || v.category === 'premade');
 
-    // Return a simplified voice list
-    const voices = (data.voices || []).map(v => ({
-      id: v.voice_id,
-      name: v.name,
-      category: v.category || 'custom',
-      previewUrl: v.preview_url || null,
-    }));
-
-    return new Response(JSON.stringify({ voices }), {
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return json({ voices });
   } catch {
-    return new Response(JSON.stringify({ error: 'Failed to reach ElevenLabs.' }), {
-      status: 502,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return json({ error: 'Failed to reach ElevenLabs.' }, 502);
   }
 }
