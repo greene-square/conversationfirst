@@ -1,26 +1,20 @@
-import { createClient } from '@supabase/supabase-js';
+import { json, readJsonBody, tooManyRequests } from './_lib/http.js';
+import { getSupabase, getUser } from './_lib/auth.js';
+import { rateLimit } from './_lib/rateLimit.js';
 
 export const config = {
   runtime: 'edge',
 };
 
-// Server-side Supabase client with service role (bypasses RLS for inserts)
-function getSupabase() {
-  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) return null;
-  return createClient(url, key);
-}
+const MAX_TURN_CHARS = 8_000;
 
-// Validate access token and return user
-async function getUser(req) {
-  const supabase = getSupabase();
-  if (!supabase) return null;
-  const token = req.headers.get('authorization')?.replace('Bearer ', '');
-  if (!token) return null;
-  const { data: { user }, error } = await supabase.auth.getUser(token);
-  if (error || !user) return null;
-  return user;
+// Model replies sometimes return keywords as a comma string; accept both.
+function toKeywords(value) {
+  const list = Array.isArray(value) ? value : typeof value === 'string' ? value.split(',') : [];
+  return list
+    .filter(k => typeof k === 'string')
+    .map(k => k.toLowerCase().trim())
+    .filter(k => k.length > 0);
 }
 
 // Call Claude Haiku for lightweight tasks (summarization, keyword extraction)
@@ -28,20 +22,25 @@ async function callHaiku(system, userContent) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: 'claude-3-5-haiku-20241022',
-      max_tokens: 512,
-      system,
-      messages: [{ role: 'user', content: userContent }],
-    }),
-  });
+  let response;
+  try {
+    response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5',
+        max_tokens: 512,
+        system,
+        messages: [{ role: 'user', content: userContent }],
+      }),
+    });
+  } catch {
+    return null;
+  }
 
   if (!response.ok) return null;
 
@@ -84,7 +83,7 @@ async function handleSummarize(body, userId) {
 Return JSON only: {"summary": "1-3 sentences capturing the key information exchanged", "keywords": ["lowercase", "words"]}
 Keywords should include: topic names, people names, company names, actions taken, key concepts, dates mentioned.
 Maximum 10 keywords. Minimum 3 keywords.`,
-    `User said: ${user_message}\n\nAssistant replied: ${assistant_message}`
+    `User said: ${String(user_message).slice(0, MAX_TURN_CHARS)}\n\nAssistant replied: ${String(assistant_message).slice(0, MAX_TURN_CHARS)}`
   );
 
   if (!result || !result.summary || !result.keywords) {
@@ -94,11 +93,7 @@ Maximum 10 keywords. Minimum 3 keywords.`,
     });
   }
 
-  // Ensure keywords are lowercase strings
-  const keywords = result.keywords
-    .filter(k => typeof k === 'string')
-    .map(k => k.toLowerCase().trim())
-    .filter(k => k.length > 0);
+  const keywords = toKeywords(result.keywords);
 
   const supabase = getSupabase();
   if (!supabase) {
@@ -120,7 +115,7 @@ Maximum 10 keywords. Minimum 3 keywords.`,
   });
 
   if (error) {
-    return new Response(JSON.stringify({ ok: false, error: error.message }), {
+    return new Response(JSON.stringify({ ok: false, error: 'Could not save memory' }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     });
@@ -135,6 +130,13 @@ Maximum 10 keywords. Minimum 3 keywords.`,
 async function handleRecall(body, userId) {
   const { query } = body;
 
+  if (query !== undefined && query !== null && typeof query !== 'string') {
+    return new Response(JSON.stringify({ error: 'query must be a string' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
   if (!query || query.trim().length < 3) {
     return new Response(JSON.stringify({ memories: [] }), {
       headers: { 'Content-Type': 'application/json' },
@@ -146,19 +148,16 @@ async function handleRecall(body, userId) {
     `Extract 3-5 search keywords from this user query that would help find relevant past conversations.
 Return JSON only: {"keywords": ["lowercase", "words"]}
 Focus on: names, topics, companies, specific concepts. Exclude generic words like "what", "how", "the".`,
-    query
+    query.slice(0, MAX_TURN_CHARS)
   );
 
-  if (!extracted || !extracted.keywords || extracted.keywords.length === 0) {
+  if (!extracted || toKeywords(extracted.keywords).length === 0) {
     return new Response(JSON.stringify({ memories: [] }), {
       headers: { 'Content-Type': 'application/json' },
     });
   }
 
-  const searchKeywords = extracted.keywords
-    .filter(k => typeof k === 'string')
-    .map(k => k.toLowerCase().trim())
-    .filter(k => k.length > 0);
+  const searchKeywords = toKeywords(extracted.keywords);
 
   const supabase = getSupabase();
   if (!supabase) {
@@ -200,8 +199,8 @@ Return JSON only: {"indices": [0, 2, 4, 1, 3]}`,
     );
 
     if (rankResult?.indices && Array.isArray(rankResult.indices)) {
-      const ranked = rankResult.indices
-        .filter(i => typeof i === 'number' && i >= 0 && i < memories.length)
+      const ranked = [...new Set(rankResult.indices)]
+        .filter(i => Number.isInteger(i) && i >= 0 && i < memories.length)
         .slice(0, 5)
         .map(i => memories[i]);
       if (ranked.length > 0) {
@@ -215,7 +214,7 @@ Return JSON only: {"indices": [0, 2, 4, 1, 3]}`,
   });
 }
 
-// ─── Action: summarize-guest (no DB save, returns result) ─
+// ─── Action: summarize-guest (no DB save, returns result for local storage) ─
 async function handleSummarizeGuest(body) {
   const { user_message, assistant_message } = body;
 
@@ -238,7 +237,7 @@ async function handleSummarizeGuest(body) {
 Return JSON only: {"summary": "1-3 sentences capturing the key information exchanged", "keywords": ["lowercase", "words"]}
 Keywords should include: topic names, people names, company names, actions taken, key concepts.
 Maximum 10 keywords. Minimum 3 keywords.`,
-    `User said: ${user_message}\n\nAssistant replied: ${assistant_message}`
+    `User said: ${String(user_message).slice(0, MAX_TURN_CHARS)}\n\nAssistant replied: ${String(assistant_message).slice(0, MAX_TURN_CHARS)}`
   );
 
   if (!result || !result.summary || !result.keywords) {
@@ -248,10 +247,7 @@ Maximum 10 keywords. Minimum 3 keywords.`,
     });
   }
 
-  const keywords = result.keywords
-    .filter(k => typeof k === 'string')
-    .map(k => k.toLowerCase().trim())
-    .filter(k => k.length > 0);
+  const keywords = toKeywords(result.keywords);
 
   return new Response(JSON.stringify({
     ok: true,
@@ -267,41 +263,28 @@ export default async function handler(req) {
     return new Response('Method not allowed', { status: 405 });
   }
 
-  let body;
-  try {
-    body = await req.json();
-  } catch {
-    return new Response(JSON.stringify({ error: 'Invalid JSON' }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
+  const { body, error } = await readJsonBody(req, { maxChars: 64_000 });
+  if (error) return error;
 
-  const { action } = body;
-
-  // Guest summarization doesn't need auth
-  if (action === 'summarize-guest') {
-    return handleSummarizeGuest(body);
-  }
-
-  // All other actions require authentication
+  // Every action calls a paid model, so all of them require a signed-in user.
   const user = await getUser(req);
   if (!user) {
-    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-      status: 401,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return json({ error: 'Unauthorized' }, 401);
   }
 
-  switch (action) {
+  const limited = await rateLimit(`brain:user:${user.id}`, { limit: 120, windowMs: 10 * 60_000 });
+  if (!limited.ok) {
+    return tooManyRequests(limited.retryAfter, 'Too many requests. Try again in a few minutes.');
+  }
+
+  switch (body.action) {
     case 'summarize':
       return handleSummarize(body, user.id);
+    case 'summarize-guest':
+      return handleSummarizeGuest(body);
     case 'recall':
       return handleRecall(body, user.id);
     default:
-      return new Response(JSON.stringify({ error: 'Unknown action' }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' },
-      });
+      return json({ error: 'Unknown action' }, 400);
   }
 }

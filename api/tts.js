@@ -1,105 +1,63 @@
-import { createClient } from '@supabase/supabase-js';
+import { json, readJsonBody, clientIp, tooManyRequests } from './_lib/http.js';
+import { bearerToken, getUser, getElevenLabsKey } from './_lib/auth.js';
+import { rateLimit } from './_lib/rateLimit.js';
 
 export const config = {
   runtime: 'edge',
 };
 
-// Server-side Supabase client with service role (bypasses RLS)
-function getSupabase() {
-  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) return null;
-  return createClient(url, key);
-}
-
-// Validate access token and return user
-async function getUser(req) {
-  const supabase = getSupabase();
-  if (!supabase) return null;
-  const token = req.headers.get('authorization')?.replace('Bearer ', '');
-  if (!token) return null;
-  const { data: { user }, error } = await supabase.auth.getUser(token);
-  if (error || !user) return null;
-  return user;
-}
-
-// Fetch user's ElevenLabs API key from vault connections
-async function getElevenLabsKey(userId) {
-  const supabase = getSupabase();
-  if (!supabase) return null;
-
-  // Resolve household
-  const { data: hh } = await supabase
-    .from('user_households')
-    .select('household_id')
-    .eq('user_id', userId)
-    .limit(1)
-    .maybeSingle();
-
-  if (!hh?.household_id) return null;
-
-  // Fetch active ElevenLabs connection
-  const { data: conn } = await supabase
-    .from('connections')
-    .select('access_token')
-    .eq('household_id', hh.household_id)
-    .eq('provider_name', 'elevenlabs')
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
-
-  return conn?.access_token || null;
-}
+const DEFAULT_VOICE = '21m00Tcm4TlvDq8ikWAM'; // Rachel, an ElevenLabs stock voice
+const VOICE_ID = /^[A-Za-z0-9]{10,64}$/;
+const TIERS = {
+  guest: { maxText: 2_500, rate: { limit: 10, windowMs: 10 * 60_000 } },
+  user: { maxText: 10_000, rate: { limit: 60, windowMs: 10 * 60_000 } },
+};
 
 export default async function handler(req) {
   if (req.method !== 'POST') {
     return new Response('Method not allowed', { status: 405 });
   }
 
-  let body;
-  try {
-    body = await req.json();
-  } catch {
-    return new Response(JSON.stringify({ error: 'Invalid JSON' }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' },
-    });
+  const user = bearerToken(req) ? await getUser(req) : null;
+  const tier = user ? TIERS.user : TIERS.guest;
+
+  const limited = await rateLimit(user ? `tts:user:${user.id}` : `tts:ip:${clientIp(req)}`, tier.rate);
+  if (!limited.ok) {
+    return tooManyRequests(limited.retryAfter, 'Too many read-aloud requests. Try again in a few minutes.');
   }
+
+  const { body, error } = await readJsonBody(req, { maxChars: tier.maxText * 2 + 1_000 });
+  if (error) return error;
 
   const { text, voiceId } = body;
   if (!text || typeof text !== 'string') {
-    return new Response(JSON.stringify({ error: 'text field required' }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return json({ error: 'text field required' }, 400);
+  }
+  if (text.length > tier.maxText) {
+    return json({ error: 'This message is too long to read aloud.' }, 413);
+  }
+  if (voiceId !== undefined && voiceId !== null && (typeof voiceId !== 'string' || !VOICE_ID.test(voiceId))) {
+    return json({ error: 'Invalid voice.' }, 400);
   }
 
-  // Try env var first (demo mode), then fall back to vault lookup
-  let apiKey = process.env.ELEVENLABS_API_KEY || null;
-
+  // Signed-in users use their own vault key, falling back to the site key.
+  // Guests can only use the site key (demo mode), if one is configured.
+  const siteKey = process.env.ELEVENLABS_API_KEY || null;
+  const apiKey = user ? (await getElevenLabsKey(user.id)) || siteKey : siteKey;
   if (!apiKey) {
-    const user = await getUser(req);
-    if (!user) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-    apiKey = await getElevenLabsKey(user.id);
+    if (!user) return json({ error: 'Unauthorized' }, 401);
+    return json({ error: 'No ElevenLabs API key configured.' }, 404);
   }
 
-  if (!apiKey) {
-    return new Response(JSON.stringify({ error: 'No ElevenLabs API key configured.' }), {
-      status: 404,
-      headers: { 'Content-Type': 'application/json' },
-    });
+  const voice = voiceId || DEFAULT_VOICE;
+  // On the site key, guests are limited to stock voices so nobody can
+  // synthesise speech with a cloned voice on the account.
+  if (!user && voice !== DEFAULT_VOICE && !(await isStockVoice(voice, apiKey))) {
+    return json({ error: 'That voice is only available when signed in.' }, 403);
   }
-
-  // Default voice: Rachel (ElevenLabs default)
-  const voice = voiceId || '21m00Tcm4TlvDq8ikWAM';
 
   try {
-    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voice}`, {
+    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voice)}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -121,26 +79,37 @@ export default async function handler(req) {
       if (status === 401) message = 'ElevenLabs API key is invalid. Update it in the Vault.';
       else if (status === 429) message = 'ElevenLabs rate limit reached. Try again shortly.';
       else if (status === 422) message = 'Text too long or invalid for synthesis.';
-
-      return new Response(JSON.stringify({ error: message }), {
-        status: 502,
-        headers: { 'Content-Type': 'application/json' },
-      });
+      return json({ error: message }, 502);
     }
 
-    // Convert audio response to base64
-    const arrayBuffer = await response.arrayBuffer();
-    const base64 = btoa(
-      new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
-    );
-
-    return new Response(JSON.stringify({ audio: base64 }), {
-      headers: { 'Content-Type': 'application/json' },
-    });
-  } catch (err) {
-    return new Response(JSON.stringify({ error: 'Failed to reach ElevenLabs.' }), {
-      status: 502,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    const audio = toBase64(new Uint8Array(await response.arrayBuffer()));
+    return json({ audio });
+  } catch {
+    return json({ error: 'Failed to reach ElevenLabs.' }, 502);
   }
+}
+
+const stockVoiceCache = new Map();
+
+async function isStockVoice(voiceId, apiKey) {
+  if (stockVoiceCache.has(voiceId)) return stockVoiceCache.get(voiceId);
+  try {
+    const res = await fetch(`https://api.elevenlabs.io/v1/voices/${encodeURIComponent(voiceId)}`, {
+      headers: { 'xi-api-key': apiKey },
+    });
+    const stock = res.ok && (await res.json())?.category === 'premade';
+    stockVoiceCache.set(voiceId, stock);
+    return stock;
+  } catch {
+    return false;
+  }
+}
+
+// Chunked to avoid building the string one character at a time.
+function toBase64(bytes) {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(binary);
 }
