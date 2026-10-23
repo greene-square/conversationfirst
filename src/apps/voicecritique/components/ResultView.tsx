@@ -7,6 +7,7 @@ import {
 } from '@heroicons/react/24/outline'
 import type { VCSession } from '../lib/types'
 import { formatDuration } from '../lib/storage'
+import { sanitizeHtml } from '../../../lib/sanitizeHtml'
 
 interface ResultViewProps {
   session: VCSession
@@ -39,7 +40,7 @@ export default function ResultView({ session, onBack, onNewRecording }: ResultVi
   }
 
   const rendered = session.structuredOutput
-    ? renderMarkdown(session.structuredOutput)
+    ? sanitizeHtml(renderMarkdown(session.structuredOutput))
     : '<p>No structured output available.</p>'
 
   return (
@@ -105,8 +106,9 @@ function renderMarkdown(md: string): string {
     }
   }
 
+  // Escape first: the output comes from a model and the raw transcript.
   function inlineFormat(text: string): string {
-    return text
+    return escapeHtml(text)
       .replace(/`([^`]+)`/g, '<code>$1</code>')
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
   }
