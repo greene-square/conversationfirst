@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { fetchConnections } from '../../lib/connections'
 import type { Connection } from '../../lib/types'
 import { loadSessions, saveSession, deleteSession } from './lib/storage'
+import { loadExampleBank, type ExampleBank } from './lib/exampleStore'
+import { SAMPLE_EXAMPLES } from './lib/sampleExamples'
 import { getDefaultSettings } from './components/SettingsPanel'
 import type { InterviewSession, OnPointView, OnPointSettings } from './lib/types'
 import SessionHistory from './components/SessionHistory'
@@ -18,6 +20,16 @@ export default function OnPoint({ householdId }: OnPointProps) {
   const [settings, setSettings] = useState<OnPointSettings>(getDefaultSettings)
   const [deepgramKey, setDeepgramKey] = useState<string | null>(null)
   const [loadingKey, setLoadingKey] = useState(true)
+  const [exampleBank, setExampleBank] = useState<ExampleBank>({ examples: SAMPLE_EXAMPLES, source: 'sample' })
+
+  // Load the household's private answer bank (falls back to the sample)
+  useEffect(() => {
+    let cancelled = false
+    loadExampleBank(householdId)
+      .then(bank => { if (!cancelled) setExampleBank(bank) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [householdId])
 
   // Fetch Deepgram API key from vault
   useEffect(() => {
@@ -133,11 +145,13 @@ export default function OnPoint({ householdId }: OnPointProps) {
           onSelectSession={handleSelectSession}
           onDeleteSession={handleDeleteSession}
           hasDeepgramKey={!!deepgramKey}
+          usingSampleExamples={exampleBank.source === 'sample'}
         />
       ) : activeSession ? (
         <ActiveSession
           session={activeSession}
           deepgramKey={deepgramKey}
+          examples={exampleBank.examples}
           settings={settings}
           onSettingsChange={setSettings}
           onSessionUpdate={handleSessionUpdate}
