@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import '../apps.css'
 import { HouseholdCtx, useHouseholdProvider } from '../lib/useHousehold'
 import SideNav from './SideNav'
 import VaultPage from './VaultPage'

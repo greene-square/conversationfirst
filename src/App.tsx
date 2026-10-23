@@ -1,7 +1,10 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, lazy, Suspense } from 'react'
 import OverviewChat from './components/OverviewChat'
-import AuthenticatedShell from './components/AuthenticatedShell'
 import { useAuth } from './context/AuthContext'
+
+// Signed-in code (apps, vault, persistent chat) loads only after sign-in, so
+// public visitors never download it.
+const AuthenticatedShell = lazy(() => import('./components/AuthenticatedShell'))
 
 export default function App() {
   const [route, setRoute] = useState(window.location.hash)
@@ -41,7 +44,11 @@ export default function App() {
 
   // Authenticated platform shell: apps, vault, chat
   if (isAuthenticated && (isApps || isVault || isOverview || isChat)) {
-    return <AuthenticatedShell user={user} session={session} />
+    return (
+      <Suspense fallback={<ShellFallback />}>
+        <AuthenticatedShell user={user} session={session} />
+      </Suspense>
+    )
   }
 
   // Public landing page: ephemeral guest chat (no auth required)
@@ -70,6 +77,17 @@ export default function App() {
       <main id="main-content">
         <OverviewChat />
       </main>
+    </div>
+  )
+}
+
+function ShellFallback() {
+  return (
+    <div className="shell-fallback" role="status">
+      <div className="processing-status">
+        <div className="processing-cursor" aria-hidden="true" />
+        <span className="processing-text">Loading</span>
+      </div>
     </div>
   )
 }

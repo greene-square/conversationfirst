@@ -4,3 +4,5 @@ dist
 *.local
 .vercel
 .env*.local
+# Personal data kept out of the public repo (e.g. OnPoint answer bank)
+private/
