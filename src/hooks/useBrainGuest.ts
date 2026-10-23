@@ -50,7 +50,7 @@ function extractWords(text) {
  * Uses localStorage for memory storage.
  * Calls the API for summarization (keyword extraction), but does recall locally.
  */
-export function useBrainGuest() {
+export function useBrainGuest(accessToken = null) {
   const lastMemoriesRef = useRef([]);
 
   /**
@@ -71,10 +71,12 @@ export function useBrainGuest() {
     if (!userText.trim() || !assistantText.trim()) return;
     if ((userText + assistantText).trim().length < 50) return;
 
-    // Call API for summarization (no auth needed for guest mode)
+    // Signed-in users without the database still need a token: summarizing
+    // calls a paid model.
+    if (!accessToken) return;
     fetch('/api/brain', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
       body: JSON.stringify({
         action: 'summarize-guest',
         user_message: userText.trim(),
@@ -98,7 +100,7 @@ export function useBrainGuest() {
         saveMemories([memory, ...existing]);
       })
       .catch(() => {}); // Silently ignore
-  }, []);
+  }, [accessToken]);
 
   /**
    * Recall relevant memories using client-side keyword matching.
