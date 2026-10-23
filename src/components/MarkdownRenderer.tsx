@@ -1,5 +1,6 @@
 import { useMemo, useRef, useEffect, useCallback } from 'react';
 import { marked } from 'marked';
+import { sanitizeHtml } from '../lib/sanitizeHtml';
 
 marked.setOptions({
   gfm: true,
@@ -42,7 +43,8 @@ marked.use({
 });
 
 export default function MarkdownRenderer({ content }) {
-  const html = useMemo(() => marked.parse(content || ''), [content]);
+  // Answers (and cf-preview blocks) come from the model, so sanitise them.
+  const html = useMemo(() => sanitizeHtml(marked.parse(content || '') as string), [content]);
   const containerRef = useRef(null);
 
   const handleClick = useCallback((e) => {

@@ -938,9 +938,14 @@ kbd {
   }
 }
 
-/* Generative UI preview container: no chrome, flows inline */
+/* Generative UI preview container: no chrome, flows inline.
+   Previews are model-generated HTML: layout containment makes this the
+   containing block even for fixed-position children, so a preview can never
+   overlay the rest of the page. */
 .cf-preview {
   margin: var(--space-4) 0;
+  contain: layout;
+  isolation: isolate;
 }
 .cf-preview > *:last-child { margin-bottom: 0; }
 
