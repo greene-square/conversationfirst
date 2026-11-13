@@ -36,17 +36,23 @@ async function callHaiku(system, userContent) {
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: 'claude-3-5-haiku-20241022',
-      max_tokens: 512,
+      model: 'claude-haiku-5-5',
+      // Thinking counts toward max_tokens; low effort usually skips it
+      max_tokens: 2048,
+      output_config: { effort: 'low' },
       system,
       messages: [{ role: 'user', content: userContent }],
     }),
   });
 
-  if (!response.ok) return null;
+  if (!response.ok) {
+    console.error('Anthropic API error', response.status, await response.text().catch(() => ''));
+    return null;
+  }
 
   const data = await response.json();
-  const text = data.content?.[0]?.text;
+  // A response can start with a thinking block, so find the text by type
+  const text = data.content?.find(b => b.type === 'text')?.text;
   if (!text) return null;
 
   // Extract JSON from response (may be wrapped in markdown code blocks)

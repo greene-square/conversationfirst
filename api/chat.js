@@ -399,10 +399,15 @@ export default async function handler(req) {
       'Content-Type': 'application/json',
       'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',
+      'anthropic-beta': 'server-side-fallback-2026-07-01',
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 4096,
+      model: 'claude-sonnet-5-5',
+      // Thinking counts toward max_tokens; low effort keeps chat replies quick
+      max_tokens: 16000,
+      output_config: { effort: 'low' },
+      // Retry a safety-classifier decline on a fallback model instead of failing
+      fallbacks: 'default',
       stream: true,
       system: systemPrompt,
       tools: [{
@@ -425,6 +430,7 @@ export default async function handler(req) {
     } catch {
       try { detail = await response.text(); } catch {}
     }
+    console.error('Anthropic API error', response.status, detail);
 
     // Map to user-friendly messages
     let userMessage;
