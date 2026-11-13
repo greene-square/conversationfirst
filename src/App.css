@@ -929,6 +929,21 @@ kbd {
 }
 .processing-minimal .processing-status { margin-bottom: 0; }
 
+/* Design system page scroll container (public route and signed-in shell) */
+.overview-page {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: clip;
+}
+
+/* Shown while the signed-in shell chunk loads */
+.shell-fallback {
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+}
+
 /* Reduced motion: respect user preference (WCAG 2.3.3) */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
