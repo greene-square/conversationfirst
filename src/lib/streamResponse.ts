@@ -38,6 +38,12 @@ export async function streamResponse(messages, callbacks, accessToken, memories 
   let buffer = '';
   let stopReason = null;
 
+  // A declined request may stop with partial or no text: show an error
+  // rather than saving it as the assistant's reply.
+  const finish = () => stopReason === 'refusal'
+    ? onError('That request was declined. Try rephrasing your message.')
+    : onDone(stopReason);
+
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -51,7 +57,7 @@ export async function streamResponse(messages, callbacks, accessToken, memories 
         if (!line.startsWith('data: ')) continue;
         const data = line.slice(6).trim();
         if (data === '[DONE]') {
-          onDone(stopReason);
+          finish();
           return;
         }
         try {
@@ -81,7 +87,7 @@ export async function streamResponse(messages, callbacks, accessToken, memories 
           }
 
           if (parsed.type === 'message_stop') {
-            onDone(stopReason);
+            finish();
             return;
           }
         } catch {}
@@ -92,5 +98,5 @@ export async function streamResponse(messages, callbacks, accessToken, memories 
     return;
   }
 
-  onDone(stopReason);
+  finish();
 }
