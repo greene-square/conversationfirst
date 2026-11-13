@@ -6,13 +6,13 @@ import {
 } from '@heroicons/react/24/outline'
 import { QuestionDetector } from '../lib/questionDetector'
 import { Matcher } from '../lib/matcher'
-import { EXAMPLES } from '../lib/examples'
 import { generateSessionTitle, formatDuration } from '../lib/storage'
 import type {
   InterviewSession,
   TranscriptEntry,
   SessionQuestion,
   OnPointSettings,
+  Example,
 } from '../lib/types'
 import MatchDisplay from './MatchDisplay'
 import TranscriptPanel from './TranscriptPanel'
@@ -21,6 +21,7 @@ import SettingsPanel from './SettingsPanel'
 interface ActiveSessionProps {
   session: InterviewSession
   deepgramKey: string | null
+  examples: Example[]
   settings: OnPointSettings
   onSettingsChange: (settings: OnPointSettings) => void
   onSessionUpdate: (session: InterviewSession) => void
@@ -31,6 +32,7 @@ interface ActiveSessionProps {
 export default function ActiveSession({
   session,
   deepgramKey,
+  examples,
   settings,
   onSettingsChange,
   onSessionUpdate,
@@ -46,7 +48,10 @@ export default function ActiveSession({
   const recorderRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const detectorRef = useRef(new QuestionDetector())
-  const matcherRef = useRef(new Matcher(EXAMPLES))
+  const matcherRef = useRef(new Matcher(examples))
+  useEffect(() => {
+    matcherRef.current = new Matcher(examples)
+  }, [examples])
   const speakerCountsRef = useRef<Record<string, number>>({})
   const mySpeakerRef = useRef<number | null>(null)
   const sessionRef = useRef(session)

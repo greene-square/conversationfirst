@@ -3,7 +3,6 @@ import { createRoot } from 'react-dom/client';
 import './tokens.css';
 import './App.css';
 import './chat.css';
-import './apps.css';
 import App from './App';
 import { AuthProvider } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
