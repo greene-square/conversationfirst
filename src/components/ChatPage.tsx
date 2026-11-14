@@ -60,7 +60,7 @@ export default function ChatPage({
 
   // Brain: memory system for recall and summarization
   const brain = useBrain(accessToken);
-  const brainGuest = useBrainGuest();
+  const brainGuest = useBrainGuest(accessToken);
   const activeBrain = useDB ? brain : brainGuest;
 
   // Use DB-backed hook when authenticated AND DB is available, otherwise localStorage

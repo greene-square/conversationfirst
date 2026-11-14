@@ -26,4 +26,9 @@ export default defineConfig([
       'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
     },
   },
+  {
+    // Server code: Vercel functions and local scripts run on Node/edge.
+    files: ['api/**/*.js', 'scripts/**/*.mjs'],
+    languageOptions: { globals: { ...globals.node } },
+  },
 ])
