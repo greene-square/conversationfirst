@@ -454,7 +454,10 @@ function validateMessages(messages, tier, allowImages) {
     if (!m || (m.role !== 'user' && m.role !== 'assistant')) {
       return { error: 'Each message needs a role of user or assistant.' };
     }
-    const content = cleanContent(m.content, tier, allowImages);
+    // Only user turns are length-capped: assistant turns are earlier replies
+    // sent back as history, and the body cap still bounds the total.
+    const maxChars = m.role === 'user' ? tier.maxChars : Infinity;
+    const content = cleanContent(m.content, maxChars, allowImages);
     if (content.error) return { error: content.error };
     // An empty assistant turn (e.g. from a stream that failed) is rejected
     // upstream and would break every later request. Drop it instead.
@@ -468,11 +471,11 @@ function validateMessages(messages, tier, allowImages) {
   return { messages: clean };
 }
 
-function cleanContent(content, tier, allowImages) {
+function cleanContent(content, maxChars, allowImages) {
   const tooLong = { error: 'Message too long. Try a shorter message or clear the conversation.' };
 
   if (typeof content === 'string') {
-    if (content.length > tier.maxChars) return tooLong;
+    if (content.length > maxChars) return tooLong;
     return { value: content, empty: content.trim() === '' };
   }
 
@@ -482,7 +485,7 @@ function cleanContent(content, tier, allowImages) {
   let images = 0;
   for (const block of content) {
     if (block?.type === 'text' && typeof block.text === 'string') {
-      if (block.text.length > tier.maxChars) return tooLong;
+      if (block.text.length > maxChars) return tooLong;
       if (block.text.trim() !== '') blocks.push({ type: 'text', text: block.text });
     } else if (block?.type === 'image' && allowImages) {
       const source = cleanImageSource(block.source);

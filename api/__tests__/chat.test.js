@@ -376,6 +376,33 @@ describe('api/chat', () => {
       const long = Array.from({ length: 21 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: 'x' }))
       expect((await handler(makeReq({ messages: long }))).status).toBe(400)
       expect((await handler(makeReq({ messages: [{ role: 'user', content: 'x'.repeat(4_001) }] }))).status).toBe(400)
+      const longBlock = [{ type: 'text', text: 'x'.repeat(4_001) }]
+      expect((await handler(makeReq({ messages: [{ role: 'user', content: longBlock }] }))).status).toBe(400)
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('lets a guest follow up after a reply longer than the per-message cap', async () => {
+      const reply = 'y'.repeat(12_000)
+      const messages = [
+        { role: 'user', content: 'show me a CV preview' },
+        { role: 'assistant', content: reply },
+        { role: 'user', content: 'shorter please' },
+      ]
+      expect((await handler(makeReq({ messages }))).status).toBe(200)
+      expect(sentBody(fetchMock).messages[1]).toEqual({ role: 'assistant', content: reply })
+      // Text blocks in assistant turns are uncapped too.
+      messages[1] = { role: 'assistant', content: [{ type: 'text', text: reply }] }
+      expect((await handler(makeReq({ messages }))).status).toBe(200)
+    })
+
+    it('still rejects a guest body over 64,000 characters, whatever the roles', async () => {
+      const messages = [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: 'y'.repeat(64_000) },
+        { role: 'user', content: 'again' },
+      ]
+      const res = await handler(makeReq({ messages }))
+      expect(res.status).toBe(413)
       expect(fetchMock).not.toHaveBeenCalled()
     })
 
